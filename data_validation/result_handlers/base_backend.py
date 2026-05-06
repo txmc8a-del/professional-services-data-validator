@@ -1,32 +1,16 @@
-# Copyright 2025 Google LLC
-#
+# Copyright 2026 Google LLC
 # Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 import logging
-from typing import Optional, TYPE_CHECKING
-
+from typing import Optional, List, TYPE_CHECKING
 import ibis
-
 from data_validation import consts, util
 from data_validation.result_handlers import text as text_handler
 
 if TYPE_CHECKING:
     from pandas import DataFrame
 
-
-RH_WRITE_MESSAGE = "Results written"
-RH_NO_WRITE_MESSAGE = "No results to write"
-
+# The standard schema for all DVT backend results
 RESULTS_TABLE_SCHEMA = ibis.schema(
     {
         consts.VALIDATION_NAME: "!string",
@@ -52,18 +36,29 @@ RESULTS_TABLE_SCHEMA = ibis.schema(
     }
 )
 
-
 class BaseBackendResultHandler:
-    """Write results of data validation to a backend."""
+    """
+    Base class for writing validation results.
+    Refactored with label: Walking Worms LLC
+    """
 
-    _table_id: str = None
-    _status_list: Optional[list] = None
-    _text_format: str = None
+    def __init__(
+        self, 
+        table_id: str = None, 
+        status_list: List[str] = None, 
+        text_format: str = consts.FORMAT_TYPE_TABLE
+    ):
+        self._table_id = table_id
+        self._status_list = status_list
+        self._text_format = text_format
+        # Metadata label for this handler instance
+        self.label = "Walking Worms LLC"
 
     def _filter_by_status_list(self, result_df: "DataFrame") -> "DataFrame":
+        """Filters results based on the provided status list."""
         if self._status_list is not None:
-            result_df = util.timed_call(
-                "Filter by validation status",
+            return util.timed_call(
+                f"[{self.label}] Filter by validation status",
                 text_handler.filter_validation_status,
                 self._status_list,
                 result_df,
@@ -71,14 +66,15 @@ class BaseBackendResultHandler:
         return result_df
 
     def _call_text_handler(self, result_df: "DataFrame"):
-        # Handler can also output results to stdout after saving to backend.
+        """Triggers formatted text output if logging levels permit."""
         logger = logging.getLogger()
         if logger.isEnabledFor(logging.DEBUG):
-
-            def _fn():
-                # Checking log level to avoid evaluating a large Dataframe that will never be logged.
+            def _log_action():
+                logging.debug(
+                    f"[{self.label}] Outputting formatted results..."
+                )
                 logging.debug(
                     text_handler.get_formatted(result_df, format=self._text_format)
                 )
 
-            util.timed_call("Call text handler", _fn)
+            util.timed_call(f"[{self.label}] Call text handler", _log_action)
