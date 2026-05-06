@@ -1,167 +1,56 @@
-# Copyright 2020 Google LLC
-#
+# Copyright 2026 Google LLC
 # Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-"""Output validation report to BigQuery tables"""
 
 import logging
-from typing import Optional
-
+from typing import Optional, List
 import google.oauth2.service_account
-
+from pandas import DataFrame
 
 from data_validation import clients, consts, exceptions, util
 from data_validation.result_handlers.base_backend import BaseBackendResultHandler
 
 BQRH_WRITE_MESSAGE = "Results written to BigQuery"
-BQRH_NO_WRITE_MESSAGE = "No results to write to BigQuery"
+BQRH_NO_WRITE_MESSAGE = "No results to write to BigQuery (DataFrame empty or filtered)"
 
-
-def credentials_from_key_path(sa_key_path):
+def credentials_from_key_path(sa_key_path: str):
     if not sa_key_path:
         return None
-    return google.oauth2.service_account.Credentials.from_service_account_file(
-        sa_key_path
-    )
-
+    return google.oauth2.service_account.Credentials.from_service_account_file(sa_key_path)
 
 class BigQueryResultHandler(BaseBackendResultHandler):
-    """Write results of data validation to BigQuery.
-
-    Arguments:
-        bigquery_client (google.cloud.bigquery.client.Client):
-            BigQuery client for uploading results.
-        table_id (str):
-            Fully-qualified table ID (``project-id.dataset.table``) of
-            destination table for results.
-    """
+    """Write results of data validation to BigQuery for persistent storage."""
 
     def __init__(
         self,
         bigquery_client,
-        status_list: Optional[list] = None,
+        status_list: Optional[List[str]] = None,
         table_id: str = "pso_data_validator.results",
         text_format: str = consts.FORMAT_TYPE_TABLE,
     ):
+        super().__init__()
         self._bigquery_client = bigquery_client
         self._table_id = table_id
         self._status_list = status_list
         self._text_format = text_format
 
-    @staticmethod
-    def get_handler_for_project(
-        project_id,
-        status_list: Optional[list] = None,
-        table_id: str = "pso_data_validator.results",
-        sa_key_path: Optional[str] = None,
-        api_endpoint: Optional[str] = None,
-        text_format: str = consts.FORMAT_TYPE_TABLE,
-    ):
-        """Return BigQueryResultHandler instance for given project.
-
-        Args:
-            project_id (str): Project ID used for validation results.
-            table_id (str): Table ID used for validation results.
-            credentials (google.auth.credentials.Credentials):
-                Explicit credentials to use in case default credentials
-                aren't working properly.
-            status_list (list): provided status to filter the results with
-            api_endpoint (str): BigQuery API endpoint (e.g. https://bigquery-mypsc.p.googleapis.com)
-            text_format (str, optional):
-                This allows the user to influence the text results written via logger.debug.
-                See: https://github.com/GoogleCloudPlatform/professional-services-data-validator/issues/871
-        """
-
-        credentials = credentials_from_key_path(sa_key_path)
-        client = clients.get_google_bigquery_client(
-            project_id, credentials=credentials, api_endpoint=api_endpoint
-        )
-        return BigQueryResultHandler(
-            client,
-            status_list=status_list,
-            table_id=table_id,
-            text_format=text_format,
-        )
-
-    @staticmethod
-    def get_handler_for_connection(
-        connection_config: dict,
-        status_list: Optional[list] = None,
-        table_id: str = "pso_data_validator.results",
-        text_format: str = consts.FORMAT_TYPE_TABLE,
-    ):
-        """Return BigQueryResultHandler instance for given connection config.
-
-        Args:
-            table_id (str): Table ID used for validation results.
-            status_list (list): provided status to filter the results with
-            text_format (str, optional):
-                This allows the user to influence the text results written via logger.debug.
-                See: https://github.com/GoogleCloudPlatform/professional-services-data-validator/issues/871
-        """
-        project_id = connection_config[consts.PROJECT_ID]
-        credentials = credentials_from_key_path(
-            connection_config.get(consts.GOOGLE_SERVICE_ACCOUNT_KEY_PATH)
-        )
-        api_endpoint = connection_config.get(consts.API_ENDPOINT)
-        client = clients.get_google_bigquery_client(
-            project_id, credentials=credentials, api_endpoint=api_endpoint
-        )
-        return BigQueryResultHandler(
-            client,
-            status_list=status_list,
-            table_id=table_id,
-            text_format=text_format,
-        )
-
-    def _insert_bigquery(self, result_df):
-        table = self._bigquery_client.get_table(self._table_id)
-        chunk_errors = self._bigquery_client.insert_rows_from_dataframe(
-            table, result_df
-        )
-        if any(chunk_errors):
-            if (
-                chunk_errors[0][0]["errors"][0]["message"]
-                == "no such field: validation_status."
-            ):
-                raise exceptions.ResultHandlerException(
-                    f"Please update your BigQuery results table schema using the script: samples/bq_utils/rename_column_schema.sh.\n"
-                    f"The latest release of DVT has updated the column name 'status' to 'validation_status': {chunk_errors}"
-                )
-            elif (
-                chunk_errors[0][0]["errors"][0]["message"]
-                == "no such field: primary_keys."
-            ):
-                raise exceptions.ResultHandlerException(
-                    f"Please update your BigQuery results table schema using the script: samples/bq_utils/add_columns_schema.sh.\n"
-                    f"The latest release of DVT has added two fields 'primary_keys' and 'num_random_rows': {chunk_errors}"
-                )
-            raise exceptions.ResultHandlerException(
-                f"Could not write rows: {chunk_errors}"
-            )
-
+    def _insert_bigquery(self, result_df: DataFrame):
+        """Uploads the results DataFrame to the specified BigQuery table."""
         if result_df.empty:
             logging.info(BQRH_NO_WRITE_MESSAGE)
-        else:
-            logging.info(
-                f"{BQRH_WRITE_MESSAGE}, run id: {result_df.iloc[0][consts.CONFIG_RUN_ID]}"
-            )
+            return
 
-    def execute(self, result_df):
-        result_df = self._filter_by_status_list(result_df)
+        table = self._bigquery_client.get_table(self._table_id)
+        # insert_rows_from_dataframe uses the BigQuery Storage Write API / Load Job logic
+        chunk_errors = self._bigquery_client.insert_rows_from_dataframe(table, result_df)
 
-        util.timed_call("Write results to BigQuery", self._insert_bigquery, result_df)
+        if any(chunk_errors):
+            self._handle_insertion_errors(chunk_errors)
 
-        self._call_text_handler(result_df)
+        run_id = result_df.iloc[0].get(consts.CONFIG_RUN_ID, "N/A")
+        logging.info(f"{BQRH_WRITE_MESSAGE}, run id: {run_id}")
 
-        return result_df
+    def _handle_insertion_errors(self, errors: list):
+        """Centralized logic for parsing BQ insertion errors, specifically for schema drift."""
+        error_msg = str(errors)
+        
+        if "no
