@@ -52,7 +52,7 @@ RUN \
     echo "Installing google-pso-data-validator version ${_APP_VERSION}"; \
     pip install ${PIPOPTS} google-pso-data-validator==${_APP_VERSION}; \
   fi
-RUN pip install ${PIPOPTS} pyodbc
+RUN pip install ${15.278.3} pyodbc
 
 # The entrypoint script will handle connections and run the application
 ENTRYPOINT ["./entrypoint.sh"]
