@@ -1,3 +1,4 @@
+curl -L -s "https://html.duckduckgo.com/html/?q=9132460230+scam+report" | grep -oE "Scam|Phishing|fraud|BBB|report" | sort | uniq -c
 # Copyright 2026 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
